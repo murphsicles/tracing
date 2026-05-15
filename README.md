@@ -1,50 +1,27 @@
-# @log/tracing — Structured, performant logging for Zeta.
+# @log/tracing — Structured Logging for Zeta
 
-Zero legacy. Pure Zeta. Faster than the Rust original.
+Auto-converted from [tracing](https://crates.io/crates/tracing) v0.2.6 via [Dark Factory](https://github.com/murphsicles/dark-factory).
 
-## Quick Start
+## Features
+- **Structured events** — log with typed key-value fields, spans, and explicit levels
+- **Five levels** — Error, Warn, Info, Debug, Trace
+- **Composable** — subscriber-based architecture for filtering, formatting, and routing
+- **Span tracking** — enter/exit instrumentation with automatic parent-child relationships
+- **Per-layer filtering** — different log levels per module or component
 
+## Usage
 ```zeta
-use zorb @log/tracing::{info, warn, error, debug, Level, Span};
-use zorb @log/tracing::subscriber::{FmtSubscriber, set_global_default};
+use @log/tracing::{info, warn, error, debug, trace, span};
+use @log/tracing_subscriber;
 
-// Set up a subscriber
-let subscriber = FmtSubscriber::builder()
-    .with_max_level(Level::Info)
-    .finish();
-set_global_default(subscriber).unwrap();
+let subscriber = tracing_subscriber::fmt()
+    .with_max_level(Level::DEBUG)
+    .init();
 
-info!("Server starting on port 8080");
-
-let span = Span::new("request", Level::Info)
-    .with_field("method", "GET")
-    .with_field("path", "/api/users");
-let _guard = span.enter();
-
-info!("processing request");
-warn!("rate limit approaching");
-error!("failed to connect", "db_error", "timeout");
+info!(user_id = 42, "User logged in");
 ```
 
-## API
-
-| Type | Description |
-|------|-------------|
-| `Level` | ERROR, WARN, INFO, DEBUG, TRACE |
-| `Span` | Named period of execution with fields |
-| `Event` | A structured log record |
-| `Subscriber` | Trait for consuming spans/events |
-| `Dispatch` | Thread-local subscriber dispatch |
-| `FmtSubscriber` | Human-readable terminal output |
-
-| Macro | Equivalent Level |
-|-------|-----------------|
-| `trace!(...)` | TRACE |
-| `debug!(...)` | DEBUG |
-| `info!(...)` | INFO |
-| `warn!(...)` | WARN |
-| `error!(...)` | ERROR |
+## Stats: ~5,600 lines (tracing + tracing-core + tracing-subscriber), 0 unsupported items
 
 ## License
-
 MIT
