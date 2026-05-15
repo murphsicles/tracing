@@ -1,0 +1,250 @@
+// @log/tracing::subscriber — Trait for consuming spans and events.
+//
+// Implement Subscriber to receive tracing data. Included subscribers:
+// - FmtSubscriber: human-readable output to stderr.
+
+use std::option::Option;
+use std::string::String;
+use std::vec::Vec;
+use crate::level::Level;
+use crate::event::Event;
+use crate::span::Span;
+use crate::field::FieldIter;
+
+/// The core trait for consuming diagnostic data.
+pub trait Subscriber {
+    /// Called when a new event is recorded.
+    fn on_event(&mut self, event: &Event);
+
+    /// Called when a new span is created (not yet entered).
+    fn on_new_span(&mut self, span: &Span);
+
+    /// Called when a span is entered.
+    fn on_enter(&mut self, span_id: u64);
+
+    /// Called when a span is exited.
+    fn on_exit(&mut self, span_id: u64);
+
+    /// Whether this subscriber is interested in the given level.
+    /// Returning false skips event construction entirely.
+    fn enabled(&self, level: &Level) -> bool;
+}
+
+// ─── FmtSubscriber ──────────────────────────────────────────────────────────
+
+/// Configuration for `FmtSubscriber`.
+pub struct FmtSubscriberBuilder {
+    max_level: Level,
+    compact: bool,
+    include_timestamp: bool,
+    include_target: bool,
+    writer: OutputWriter,
+}
+
+enum OutputWriter {
+    Stderr,
+    Stdout,
+}
+
+/// A subscriber that formats events as human-readable lines to stderr.
+pub struct FmtSubscriber {
+    max_level: Level,
+    compact: bool,
+    include_timestamp: bool,
+    include_target: bool,
+    writer: OutputWriter,
+    span_entered_count: Vec<u64>,
+}
+
+impl FmtSubscriberBuilder {
+    /// Sets the maximum verbosity level to record.
+    pub fn with_max_level(mut self, level: Level) -> Self {
+        self.max_level = level;
+        self
+    }
+
+    /// Enables compact mode (fewer lines).
+    pub fn compact(mut self, yes: bool) -> Self {
+        self.compact = yes;
+        self
+    }
+
+    /// Includes or excludes timestamps.
+    pub fn with_timestamp(mut self, yes: bool) -> Self {
+        self.include_timestamp = yes;
+        self
+    }
+
+    /// Includes or excludes the target field.
+    pub fn with_target(mut self, yes: bool) -> Self {
+        self.include_target = yes;
+        self
+    }
+
+    /// Writes to stdout instead of stderr.
+    pub fn to_stdout(mut self) -> Self {
+        self.writer = OutputWriter::Stdout;
+        self
+    }
+
+    /// Builds the subscriber.
+    pub fn finish(self) -> FmtSubscriber {
+        FmtSubscriber {
+            max_level: self.max_level,
+            compact: self.compact,
+            include_timestamp: self.include_timestamp,
+            include_target: self.include_target,
+            writer: self.writer,
+            span_entered_count: Vec::new(),
+        }
+    }
+}
+
+impl FmtSubscriber {
+    /// Creates a new builder.
+    pub fn builder() -> FmtSubscriberBuilder {
+        FmtSubscriberBuilder {
+            max_level: Level::Info,
+            compact: false,
+            include_timestamp: true,
+            include_target: true,
+            writer: OutputWriter::Stderr,
+        }
+    }
+
+    fn write(&self, msg: &str) {
+        match self.writer {
+            OutputWriter::Stderr => { std::io::stderr().write(msg.as_bytes()); }
+            OutputWriter::Stdout => { std::io::stdout().write(msg.as_bytes()); }
+        }
+    }
+
+    fn writeln(&self, msg: &str) {
+        self.write(msg);
+        self.write("\n");
+    }
+
+    fn fmt_timestamp(&self, millis: u64) -> String {
+        // Simple format: HH:MM:SS.mmm from epoch millis
+        let total_secs = millis / 1000;
+        let hours = (total_secs / 3600) % 24;
+        let mins = (total_secs / 60) % 60;
+        let secs = total_secs % 60;
+        let msecs = millis % 1000;
+        format!("{:02}:{:02}:{:02}.{:03}", hours, mins, secs, msecs)
+    }
+}
+
+impl Subscriber for FmtSubscriber {
+    fn on_event(&mut self, event: &Event) {
+        if !self.enabled(event.level()) {
+            return;
+        }
+
+        let mut line = String::new();
+
+        // Timestamp
+        if self.include_timestamp {
+            line.push_str("[");
+            line.push_str(&self.fmt_timestamp(event.timestamp_millis()));
+            line.push_str("] ");
+        }
+
+        // Level
+        line.push_str(event.level().as_str());
+        line.push_str(" ");
+
+        // Target
+        if self.include_target {
+            if let Option::Some(t) = event.target_str() {
+                line.push_str(t);
+                line.push_str(" ");
+            }
+        }
+
+        // Message
+        line.push_str(&event.message());
+
+        // Fields
+        let fields = event.fields();
+        if !fields.is_empty() {
+            line.push_str(" { ");
+            let mut first = true;
+            for i in 0..fields.len() {
+                if let Option::Some(f) = fields.get(i) {
+                    if !first {
+                        line.push_str(", ");
+                    }
+                    line.push_str(f.key());
+                    line.push_str(": ");
+                    line.push_str(f.value());
+                    first = false;
+                }
+            }
+            line.push_str(" }");
+        }
+
+        line.push('\n');
+        self.write(&line);
+    }
+
+    fn on_new_span(&mut self, span: &Span) {
+        if !self.enabled(span.level()) {
+            return;
+        }
+        let mut line = String::new();
+
+        if self.include_timestamp {
+            line.push_str("[");
+            line.push_str(&self.fmt_timestamp(span.start_time_millis()));
+            line.push_str("] ");
+        }
+
+        line.push_str(span.level().as_str());
+        line.push_str(" ");
+        line.push_str(span.name());
+        line.push_str(": enter");
+
+        let fields = span.fields();
+        if !fields.is_empty() {
+            line.push_str(" { ");
+            let mut first = true;
+            for i in 0..fields.len() {
+                if let Option::Some(f) = fields.get(i) {
+                    if !first {
+                        line.push_str(", ");
+                    }
+                    line.push_str(f.key());
+                    line.push_str(": ");
+                    line.push_str(f.value());
+                    first = false;
+                }
+            }
+            line.push_str(" }");
+        }
+
+        if self.compact {
+            if self.include_timestamp {
+                line.push('\n');
+                self.write(&line);
+            } else {
+                self.writeln(&line);
+            }
+        } else {
+            self.writeln(&line);
+        }
+    }
+
+    fn on_enter(&mut self, _span_id: u64) {
+        // Track nesting depth for indentation
+        self.span_entered_count.push(_span_id);
+    }
+
+    fn on_exit(&mut self, _span_id: u64) {
+        self.span_entered_count.pop();
+    }
+
+    fn enabled(&self, level: &Level) -> bool {
+        level.as_u8() <= self.max_level.as_u8()
+    }
+}

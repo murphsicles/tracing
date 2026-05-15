@@ -1,0 +1,153 @@
+// @log/tracing::span — A named period of execution.
+//
+// Spans track the duration of an operation. They can be entered/exited,
+// carry structured fields, and form a parent-child tree.
+
+use std::option::Option;
+use std::string::String;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use crate::level::Level;
+use crate::field::FieldSet;
+use crate::dispatch;
+
+/// Global span ID counter.
+static NEXT_SPAN_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Thread-local stack of active span IDs for parent tracking.
+struct SpanStack {
+    ids: Vec<u64>,
+}
+
+impl SpanStack {
+    fn new() -> Self { SpanStack { ids: Vec::new() } }
+    fn push(&mut self, id: u64) { self.ids.push(id); }
+    fn pop(&mut self) -> Option<u64> { self.ids.pop() }
+    fn current(&self) -> Option<u64> {
+        self.ids.last().copied()
+    }
+}
+
+// Thread-local span stack
+thread_local! {
+    static CURRENT_SPAN: std::cell::UnsafeCell<SpanStack> = std::cell::UnsafeCell::new(SpanStack::new());
+}
+
+/// Guard that exits a span when dropped.
+///
+/// Created by `Span::enter()`. Dropping the guard calls `Span::exit()`.
+pub struct Entered {
+    span_id: u64,
+    entered: bool,
+}
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        if self.entered {
+            CURRENT_SPAN.with(|cell| {
+                let stack = unsafe { &mut *cell.get() };
+                stack.pop();
+            });
+            dispatch::dispatch_exit(self.span_id);
+            self.entered = false;
+        }
+    }
+}
+
+/// A named period of execution with begin/end timing.
+///
+/// # Example
+/// ```
+/// let span = Span::new("request", Level::Info)
+///     .with_field("method", "GET");
+/// let guard = span.enter();
+/// // ... do work ...
+/// drop(guard);  // span exited
+/// ```
+pub struct Span {
+    id: u64,
+    name: String,
+    level: Level,
+    target: Option<String>,
+    fields: FieldSet,
+    start_time: u64,
+}
+
+impl Span {
+    /// Creates a new span with the given name and level.
+    ///
+    /// The span is NOT entered until `.enter()` is called.
+    pub fn new(name: impl Into<String>, level: Level) -> Self {
+        let id = NEXT_SPAN_ID.fetch_add(1, Ordering::Relaxed);
+        Span {
+            id: id,
+            name: name.into(),
+            level: level,
+            target: Option::None,
+            fields: FieldSet::new(),
+            start_time: unix_millis(),
+        }
+    }
+
+    /// Sets the target (module path).
+    pub fn target(mut self, t: impl Into<String>) -> Self {
+        self.target = Option::Some(t.into());
+        self
+    }
+
+    /// Adds a structured key-value field.
+    pub fn with_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.fields.add(key, value);
+        self
+    }
+
+    /// Enters the span, returning a guard that exits on drop.
+    ///
+    /// The subscriber's `enter` callback is invoked immediately.
+    pub fn enter(self) -> Entered {
+        // Notify subscriber
+        dispatch::dispatch_new_span(&self);
+        dispatch::dispatch_enter(self.id);
+
+        // Push to thread-local stack
+        CURRENT_SPAN.with(|cell| {
+            let stack = unsafe { &mut *cell.get() };
+            stack.push(self.id);
+        });
+
+        Entered { span_id: self.id, entered: true }
+    }
+
+    /// Exits the span explicitly (without a guard).
+    pub fn exit(&self) {
+        CURRENT_SPAN.with(|cell| {
+            let stack = unsafe { &mut *cell.get() };
+            stack.pop();
+        });
+        dispatch::dispatch_exit(self.id);
+    }
+
+    /// Returns the ID of the current span on this thread.
+    pub fn current_id() -> Option<u64> {
+        CURRENT_SPAN.with(|cell| {
+            let stack = unsafe { &*cell.get() };
+            stack.current()
+        })
+    }
+
+    // ── Getters ──
+
+    pub fn id(&self) -> u64 { self.id }
+    pub fn name(&self) -> &str { &self.name }
+    pub fn level(&self) -> &Level { &self.level }
+    pub fn target_str(&self) -> Option<&str> { self.target.as_deref() }
+    pub fn fields(&self) -> &FieldSet { &self.fields }
+    pub fn start_time_millis(&self) -> u64 { self.start_time }
+}
+
+fn unix_millis() -> u64 {
+    match std::time::SystemTime::now().duration_since(UNIX_EPOCH) {
+        Result::Ok(d) => d.as_millis() as u64,
+        Result::Err(_) => 0,
+    }
+}

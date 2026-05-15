@@ -1,0 +1,79 @@
+// @log/tracing::event — A structured log record at a single point in time.
+//
+// Events are the fundamental logging primitive. They carry a severity level,
+// a message, and optional structured fields.
+
+use std::option::Option;
+use std::string::String;
+use std::time::{SystemTime, UNIX_EPOCH};
+use crate::level::Level;
+use crate::field::FieldSet;
+use crate::dispatch;
+
+/// A structured logging event.
+///
+/// Created via `Event::new()` or the convenience functions `info!()`, etc.
+/// Once configured, call `.emit()` to dispatch to the active subscriber.
+pub struct Event {
+    level: Level,
+    message: String,
+    target: Option<String>,
+    fields: FieldSet,
+    timestamp: u64,
+}
+
+impl Event {
+    /// Creates a new event at the given level with a message.
+    pub fn new(level: Level, message: impl Into<String>) -> Self {
+        Event {
+            level: level,
+            message: message.into(),
+            target: Option::None,
+            fields: FieldSet::new(),
+            timestamp: unix_millis(),
+        }
+    }
+
+    /// Sets the target (module path).
+    pub fn target(mut self, t: impl Into<String>) -> Self {
+        self.target = Option::Some(t.into());
+        self
+    }
+
+    /// Adds a structured key-value field.
+    pub fn with_field(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.fields.add(key, value);
+        self
+    }
+
+    /// Adds multiple fields from an array of (key, value) tuples.
+    pub fn with_fields(mut self, pairs: &[(impl Into<String>, impl Into<String>)]) -> Self {
+        for (key, val) in pairs {
+            self.fields.add(key, val);
+        }
+        self
+    }
+
+    // ── Getters (for subscribers) ──
+
+    pub fn level(&self) -> &Level { &self.level }
+    pub fn message(&self) -> &str { &self.message }
+    pub fn target_str(&self) -> Option<&str> { self.target.as_deref() }
+    pub fn fields(&self) -> &FieldSet { &self.fields }
+    pub fn timestamp_millis(&self) -> u64 { self.timestamp }
+
+    /// Dispatches this event to the global subscriber.
+    ///
+    /// If no subscriber is set, the event is silently dropped.
+    /// This is the hot path: a single atomic load + direct call.
+    pub fn emit(self) {
+        dispatch::dispatch_event(self);
+    }
+}
+
+fn unix_millis() -> u64 {
+    match std::time::SystemTime::now().duration_since(UNIX_EPOCH) {
+        Result::Ok(d) => d.as_millis() as u64,
+        Result::Err(_) => 0,
+    }
+}

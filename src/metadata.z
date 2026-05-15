@@ -1,0 +1,61 @@
+// @log/tracing::metadata — Static metadata for spans and events.
+//
+// Holds the static description of a span or event: name, target, level,
+// source location. Shared across all instances of the same callsite.
+
+use std::string::String;
+use crate::level::Level;
+
+/// Static metadata for a span or event.
+///
+/// Unlike tracing-core, this is a runtime-built struct (no proc macros).
+/// The subscriber uses it for filtering and display.
+pub struct Metadata {
+    /// Name of the span or event.
+    name: String,
+    /// Target/module path.
+    target: String,
+    /// Verbosity level.
+    level: Level,
+    /// Source file name.
+    file: String,
+    /// Source line number.
+    line: u32,
+    /// Whether this describes a span (true) or event (false).
+    is_span: bool,
+}
+
+impl Metadata {
+    /// Creates new metadata for a span.
+    pub fn for_span(name: impl Into<String>, level: Level, target: impl Into<String>,
+                    file: impl Into<String>, line: u32) -> Self {
+        Metadata {
+            name: name.into(),
+            target: target.into(),
+            level: level,
+            file: file.into(),
+            line: line,
+            is_span: true,
+        }
+    }
+
+    /// Creates new metadata for an event.
+    pub fn for_event(name: impl Into<String>, level: Level, target: impl Into<String>,
+                     file: impl Into<String>, line: u32) -> Self {
+        Metadata {
+            name: name.into(),
+            target: target.into(),
+            level: level,
+            file: file.into(),
+            line: line,
+            is_span: false,
+        }
+    }
+
+    pub fn name(&self) -> &str { &self.name }
+    pub fn target(&self) -> &str { &self.target }
+    pub fn level(&self) -> &Level { &self.level }
+    pub fn file(&self) -> &str { &self.file }
+    pub fn line(&self) -> u32 { self.line }
+    pub fn is_span(&self) -> bool { self.is_span }
+}

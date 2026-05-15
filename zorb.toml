@@ -1,0 +1,19 @@
+[package]
+name = "@log/tracing"
+version = "0.2.5"
+edition = "2026"
+authors = ["Zak Murphy <zak@z-lang.org>"]
+description = "Structured, performant logging for Zeta"
+license = "MIT"
+repository = "https://github.com/murphsicles/tracing"
+keywords = ["logging", "tracing", "structured", "telemetry"]
+categories = ["development-tools::debugging"]
+
+[fmt]
+style = "zeta-strict"
+max_width = 100
+use_tabs = false
+
+[lint]
+tool = "zippy"
+level = "pedantic"

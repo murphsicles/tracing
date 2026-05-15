@@ -1,0 +1,63 @@
+// @log/tracing::level — Severity levels.
+//
+// Five levels, ordered by severity. A subscriber's max_level filter
+// enables all levels at or below the configured severity.
+
+use std::string::String;
+
+/// Verbosity level for spans and events.
+///
+/// Ordering: ERROR > WARN > INFO > DEBUG > TRACE
+pub enum Level {
+    /// Critical failure.
+    Error = 0,
+    /// Warning condition.
+    Warn = 1,
+    /// Informational message.
+    Info = 2,
+    /// Debug message (verbose).
+    Debug = 3,
+    /// Trace message (very verbose).
+    Trace = 4,
+}
+
+impl Level {
+    /// Returns the name as a static string.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Level::Error => "ERROR",
+            Level::Warn => "WARN",
+            Level::Info => "INFO",
+            Level::Debug => "DEBUG",
+            Level::Trace => "TRACE",
+        }
+    }
+
+    /// Returns the numeric value (larger = more verbose).
+    pub fn as_u8(&self) -> u8 {
+        match self {
+            Level::Error => 0,
+            Level::Warn => 1,
+            Level::Info => 2,
+            Level::Debug => 3,
+            Level::Trace => 4,
+        }
+    }
+
+    /// Returns true if `self` is at least as severe as `other`.
+    pub fn is_at_least(&self, other: &Level) -> bool {
+        self.as_u8() <= other.as_u8()
+    }
+}
+
+impl PartialEq for Level {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_u8() == other.as_u8()
+    }
+}
+
+impl PartialOrd for Level {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_u8().partial_cmp(&other.as_u8())
+    }
+}

@@ -1,0 +1,102 @@
+// @log/tracing — Structured, performant logging for Zeta.
+//
+// Pure Zeta. Zero legacy. Fast path is a single atomic load and direct call.
+//
+// # Concepts
+//
+// - **Span**: a named period of execution with begin/end timing.
+// - **Event**: a structured log record at a point in time.
+// - **Subscriber**: processes spans and events. Pluggable backend.
+// - **Dispatch**: thread-local subscriber routing.
+// - **Level**: ERROR, WARN, INFO, DEBUG, TRACE — severity ordering.
+//
+// # Performance
+//
+// - Fast path (disabled level): single atomic Acquire load, no allocation.
+// - Slow path (enabled level): direct subscriber call, no trait dispatch.
+// - No spinlock callsite registry — static metadata table.
+// - Pre-allocated span ID pool — zero heap per span.
+// - Fields stored inline for small sizes (≤8 fields).
+
+pub mod level;
+pub mod metadata;
+pub mod span;
+pub mod event;
+pub mod field;
+pub mod subscriber;
+pub mod dispatch;
+
+pub use level::Level;
+pub use span::Span;
+pub use event::Event;
+pub use subscriber::Subscriber;
+pub use dispatch::Dispatch;
+
+// ─── Convenience re-exports ──────────────────────────────────────────────
+
+/// Records a structured event at the ERROR level.
+pub fn error(msg: impl Into<String>) {
+    event(Level::Error, msg.into());
+}
+
+/// Records a structured event at the ERROR level with a key-value field.
+pub fn error_with(msg: impl Into<String>, key: impl Into<String>, val: impl Into<String>) {
+    let mut e = Event::new(Level::Error, msg.into());
+    e.with_field(key.into(), val.into());
+    e.emit();
+}
+
+/// Records a structured event at the WARN level.
+pub fn warn(msg: impl Into<String>) {
+    event(Level::Warn, msg.into());
+}
+
+/// Records a structured event at the WARN level with a field.
+pub fn warn_with(msg: impl Into<String>, key: impl Into<String>, val: impl Into<String>) {
+    let mut e = Event::new(Level::Warn, msg.into());
+    e.with_field(key.into(), val.into());
+    e.emit();
+}
+
+/// Records a structured event at the INFO level.
+pub fn info(msg: impl Into<String>) {
+    event(Level::Info, msg.into());
+}
+
+/// Records a structured event at the INFO level with a field.
+pub fn info_with(msg: impl Into<String>, key: impl Into<String>, val: impl Into<String>) {
+    let mut e = Event::new(Level::Info, msg.into());
+    e.with_field(key.into(), val.into());
+    e.emit();
+}
+
+/// Records a structured event at the DEBUG level.
+pub fn debug(msg: impl Into<String>) {
+    event(Level::Debug, msg.into());
+}
+
+/// Records a structured event at the DEBUG level with a field.
+pub fn debug_with(msg: impl Into<String>, key: impl Into<String>, val: impl Into<String>) {
+    let mut e = Event::new(Level::Debug, msg.into());
+    e.with_field(key.into(), val.into());
+    e.emit();
+}
+
+/// Records a structured event at the TRACE level.
+pub fn trace(msg: impl Into<String>) {
+    event(Level::Trace, msg.into());
+}
+
+/// Records a structured event at the TRACE level with a field.
+pub fn trace_with(msg: impl Into<String>, key: impl Into<String>, val: impl Into<String>) {
+    let mut e = Event::new(Level::Trace, msg.into());
+    e.with_field(key.into(), val.into());
+    e.emit();
+}
+
+// ─── Internal event dispatch ─────────────────────────────────────────────
+
+fn event(level: Level, message: String) {
+    let e = Event::new(level, message);
+    e.emit();
+}
