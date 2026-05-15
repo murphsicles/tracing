@@ -1,109 +1,80 @@
 // @log/tracing::dispatch — Global subscriber dispatch.
 //
 // Routes spans and events to the active subscriber.
-// Hot path: single atomic load then direct call.
-// No dynamic dispatch in the hot path once subscriber is set.
+// Hot path: single atomic load then mutex-protected call.
 
 use std::option::Option;
 use std::result::Result;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use crate::level::Level;
 use crate::event::Event;
 use crate::span::Span;
 use crate::subscriber::Subscriber;
 
-/// Global subscriber (stored as a raw pointer for zero-overhead dispatch).
-/// Uses a simple atomic flag for the "is set" check.
-static GLOBAL_SUBSCRIBER: std::sync::Mutex<Option<Box<dyn FnMut() -> &'static mut dyn Subscriber>>> = std::sync::Mutex::new(Option::None);
+/// Whether a global subscriber has been set.
+static INIT: AtomicBool = AtomicBool::new(false);
 
-// Actually, let's use a simpler approach: a static mutable subscriber pointer.
-// For a production library, you'd use a proper OnceCell. For this implementation,
-// we'll use a simple global with an "initialized" flag.
-
-// Simplest correct implementation: use a Mutex-protected subscriber
-use std::sync::Mutex;
-
-static SUBSCRIBER_INIT: AtomicBool = AtomicBool::new(false);
-static SUBSCRIBER_MUTEX: Mutex<u32> = Mutex::new(0);
-
-// Box<dyn Subscriber> stored in a global static
-static mut GLOBAL_SUB: Option<Box<dyn Subscriber + Send>> = Option::None;
+/// The global subscriber, protected by a mutex for safe concurrent access.
+/// Once set, never removed (so once INIT is true, GLOBAL is always Some).
+static GLOBAL: Mutex<Option<Box<dyn Subscriber + Send>>> = Mutex::new(Option::None);
 
 /// Sets the global subscriber. Returns an error if already set.
 pub fn set_global_default(sub: impl Subscriber + Send + 'static) -> Result<(), String> {
-    if SUBSCRIBER_INIT.load(Ordering::Acquire) {
+    if INIT.load(Ordering::Acquire) {
         return Result::Err("global subscriber already set".to_string());
     }
 
-    let _lock = SUBSCRIBER_MUTEX.lock();
-    if SUBSCRIBER_INIT.load(Ordering::Relaxed) {
+    let mut guard = GLOBAL.lock();
+    if guard.is_some() {
         return Result::Err("global subscriber already set".to_string());
     }
 
-    unsafe {
-        GLOBAL_SUB = Option::Some(Box::new(sub));
-    }
-    SUBSCRIBER_INIT.store(true, Ordering::Release);
+    *guard = Option::Some(Box::new(sub));
+    INIT.store(true, Ordering::Release);
     Result::Ok(())
 }
 
-/// Returns the current subscriber, or None.
+/// Runs a closure with the global subscriber (if set).
+/// Returns None if no subscriber is registered.
 fn with_subscriber<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut dyn Subscriber) -> R,
 {
-    if !SUBSCRIBER_INIT.load(Ordering::Acquire) {
+    if !INIT.load(Ordering::Acquire) {
         return Option::None;
     }
 
-    let _lock = SUBSCRIBER_MUTEX.lock();
-    unsafe {
-        match GLOBAL_SUB {
-            Option::Some(ref mut sub) => {
-                let sub: &mut dyn Subscriber = sub.as_mut();
-                Option::Some(f(sub))
-            }
-            Option::None => Option::None,
-        }
+    let mut guard = GLOBAL.lock();
+    match guard.as_mut() {
+        Option::Some(sub) => Option::Some(f(sub.as_mut())),
+        Option::None => Option::None,
     }
 }
 
 /// Returns whether a subscriber is interested in the given level.
+/// Fast path: just the atomic flag check if no subscriber.
 pub fn is_enabled(level: &Level) -> bool {
-    if !SUBSCRIBER_INIT.load(Ordering::Acquire) {
-        return false;  // no subscriber = nothing enabled
-    }
     with_subscriber(|sub| sub.enabled(level)).unwrap_or(false)
 }
 
 /// Dispatches an event to the global subscriber.
+/// Hot path: atomic load + mutex + direct call.
 pub fn dispatch_event(event: Event) {
-    if !SUBSCRIBER_INIT.load(Ordering::Acquire) {
-        return;  // no subscriber, silently drop
-    }
     with_subscriber(|sub| sub.on_event(&event));
 }
 
 /// Notifies the subscriber of a new span.
 pub fn dispatch_new_span(span: &Span) {
-    if !SUBSCRIBER_INIT.load(Ordering::Acquire) {
-        return;
-    }
     with_subscriber(|sub| sub.on_new_span(span));
 }
 
 /// Notifies the subscriber that a span was entered.
 pub fn dispatch_enter(span_id: u64) {
-    if !SUBSCRIBER_INIT.load(Ordering::Acquire) {
-        return;
-    }
     with_subscriber(|sub| sub.on_enter(span_id));
 }
 
 /// Notifies the subscriber that a span was exited.
 pub fn dispatch_exit(span_id: u64) {
-    if !SUBSCRIBER_INIT.load(Ordering::Acquire) {
-        return;
-    }
     with_subscriber(|sub| sub.on_exit(span_id));
 }
